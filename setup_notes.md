@@ -49,8 +49,34 @@
 - First attempt (max=500, cap 32): 62.4%
 - **Final (max=720, fair condition, cap 45): 67.8%** vs RLWRLD reported 70.6%
 
-## Inference Latency Estimate
+## Inference Latency (Measured)
 
-- Full pipeline (inference + sim + render + serialize): ~1800 ms/step on RTX 3090
-- Reference (paper §6-1): RTX 5090 achieves 43.7 ms/step (pure inference only)
-- In real robot deployment, sim/render overhead drops out, so actual inference latency should be substantially lower
+Two boundaries measured on RTX 3090, TurnSinkSpout task, 10 episodes, 145 samples (post warm-up):
+
+### Server Round-trip (ZeroMQ recv -> inference -> send)
+| Metric | Value |
+|--------|-------|
+| Mean   | 413.5 ms |
+| Median | 411.5 ms |
+| p10 / p90 | 374 / 452 ms |
+
+### Policy Inference Only (RLDXPolicy._get_action - paper-aligned boundary)
+| Metric | Value |
+|--------|-------|
+| Mean   | 409.4 ms |
+| Median | 407.1 ms |
+| p10 / p90 | 370 / 448 ms |
+
+### Overhead Decomposition
+ZeroMQ recv/send + serialize + SimPolicyWrapper transform = **4.1 ms** (~1%, negligible). Policy inference dominates server round-trip.
+
+### Comparison to Reference (Paper Section 6.1)
+- Our RTX 3090 (Ampere, FP16): **409 ms / inference**
+- Paper RTX 5090 (Blackwell, FP4/FP8 native): 43.7 ms / inference
+- **Gap: ~9.4x** — attributable to GPU generation difference (Ampere -> Blackwell) plus likely optimization stack differences (torch.compile, FP precision). Note: paper does not specify exact measurement boundary, so apples-to-apples comparison is best-effort.
+
+### Effective Robot Control Rate
+- 16 actions per inference, 409 ms latency
+- **~39 Hz** action emission rate on RTX 3090
+- RTX 5090 extrapolation: ~366 Hz
+- Adequate for low-frequency manipulation tasks (pick-and-place); high-frequency control may benefit from faster GPU or further optimization
