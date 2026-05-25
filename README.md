@@ -25,6 +25,20 @@ Personal reproduction study of [RLWRLD's RLDX-1](https://www.rlwrld.ai/en/rldx-1
 | PnP      | 197 / 400 | 49% |
 | Turn     | 262 / 350 | 75% |
 
+## Inference Latency
+
+Measured on RTX 3090 (TurnSinkSpout, 145 samples post warm-up):
+
+| Boundary | Mean | Median | p10 / p90 |
+|----------|------|--------|-----------|
+| Server round-trip (ZeroMQ recv → send) | 413 ms | 412 ms | 374 / 452 ms |
+| Policy inference only (paper-aligned) | 409 ms | 407 ms | 370 / 448 ms |
+| Overhead (ZeroMQ + serialize + wrapper) | 4 ms | — | — |
+
+**Comparison to paper §6.1**: RTX 5090 reports 43.7 ms / inference. Our RTX 3090 result of 409 ms gives a ~9.4× gap, attributable to GPU generation (Ampere → Blackwell) plus likely optimization stack differences (torch.compile, FP precision).
+
+**Effective action rate**: 16 actions per inference / 409 ms = **~39 Hz** on RTX 3090. Adequate for low-frequency manipulation; high-frequency control would benefit from faster GPU.
+
 ## Notes from the Reproduction
 
 1. **Episode horizon observation**: Empirically observed that `--max-episode-steps` does not apply directly. With docs defaults (`max=720`, `n_action_steps=16`), the actual sim-step cap settled around 45. Pattern across settings suggests `actual_cap ≈ max_episode_steps / n_action_steps`. (Exact source mechanism not investigated.)
