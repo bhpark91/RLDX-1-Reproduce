@@ -1,76 +1,88 @@
-#!/bin/bash
-cd /workspace/RLDX-1
+#!/usr/bin/env bash
+set -euo pipefail
+: "${RLDX_ROOT:?Set RLDX_ROOT to your upstream RLDX-1 checkout}"
+RLDX_ROOT=$(cd "$RLDX_ROOT" && pwd)
+export OUTPUT_ROOT="${OUTPUT_ROOT:-$RLDX_ROOT/output_final/robocasa/reproduce_v2}"
+export RESULTS_CSV="${RESULTS_CSV:-$RLDX_ROOT/results_v2.csv}"
+python3 - <<'PYTHON'
+import csv
+import os
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
 
-TASKS=(
-    "TurnSinkSpout" "TurnOnStove" "TurnOnSinkFaucet" "TurnOnMicrowave"
-    "TurnOffStove" "TurnOffSinkFaucet" "TurnOffMicrowave"
-    "PnPStoveToCounter" "PnPSinkToCounter" "PnPMicrowaveToCounter"
-    "PnPCounterToStove" "PnPCounterToSink" "PnPCounterToMicrowave"
-    "PnPCounterToCab" "PnPCabToCounter"
-    "OpenSingleDoor" "OpenDrawer" "OpenDoubleDoor"
-    "CoffeeSetupMug" "CoffeeServeMug" "CoffeePressButton"
-    "CloseSingleDoor" "CloseDrawer" "CloseDoubleDoor"
-)
+TASKS = ['TurnSinkSpout', 'TurnOnStove', 'TurnOnSinkFaucet', 'TurnOnMicrowave', 'TurnOffStove', 'TurnOffSinkFaucet', 'TurnOffMicrowave', 'PnPStoveToCounter', 'PnPSinkToCounter', 'PnPMicrowaveToCounter', 'PnPCounterToStove', 'PnPCounterToSink', 'PnPCounterToMicrowave', 'PnPCounterToCab', 'PnPCabToCounter', 'OpenSingleDoor', 'OpenDrawer', 'OpenDoubleDoor', 'CoffeeSetupMug', 'CoffeeServeMug', 'CoffeePressButton', 'CloseSingleDoor', 'CloseDrawer', 'CloseDoubleDoor']
+root = Path(os.environ['OUTPUT_ROOT']).resolve()
+dest = Path(os.environ['RESULTS_CSV']).resolve()
+if not root.is_dir():
+    sys.exit(f"Missing output directory: {root}")
+if dest == root or root in dest.parents:
+    sys.exit("RESULTS_CSV must be outside OUTPUT_ROOT to protect raw results")
+rows = []
+missing = []
+def warn(message):
+    print(f"WARNING: {message}", file=sys.stderr)
 
-echo "task,category,success,total,rate_pct,avg_steps,max_steps,task_time_sec,per_step_ms" > results_v2.csv
-
-for TASK in "${TASKS[@]}"; do
-    DIR=output_final/robocasa/reproduce_v2/$TASK
-    CSV=$DIR/simulation_results.csv
-    LOG=output_final/robocasa/reproduce_v2/_logs/${TASK}.log
-    if [ ! -f "$CSV" ]; then continue; fi
-    
-    S=$(find "$DIR" -name "*success*" 2>/dev/null | wc -l)
-    C=$(find "$DIR" -name "*.mp4" 2>/dev/null | wc -l)
-    [ $C -eq 0 ] && continue
-    RATE=$((S * 100 / C))
-    
-    if [[ $TASK == Turn* ]]; then CAT="Turn"
-    elif [[ $TASK == PnP* ]]; then CAT="PnP"
-    elif [[ $TASK == Open* ]]; then CAT="Open"
-    elif [[ $TASK == Close* ]]; then CAT="Close"
-    elif [[ $TASK == Coffee* ]]; then CAT="Coffee"
-    else CAT="Other"; fi
-    
-    AVG_STEPS=$(awk -F, 'NR>1 {sum+=$5; n++} END {if(n>0) printf "%.1f", sum/n}' "$CSV")
-    MAX_STEPS=$(awk -F, 'NR>1 {if($5>max)max=$5} END {print max}' "$CSV")
-    
-    # task 전체 시간 추출 (log에서 "Collecting X episodes took Y seconds")
-    TASK_TIME=$(grep -oP 'took \K[0-9.]+' "$LOG" 2>/dev/null | tail -1)
-    [ -z "$TASK_TIME" ] && TASK_TIME=0
-    
-    # per-step time 계산 (전체 시간 / 총 step 수)
-    if (( $(echo "$TASK_TIME > 0" | bc -l) )); then
-        TOTAL_STEPS=$(awk -F, 'NR>1 {sum+=$5} END {print sum}' "$CSV")
-        PER_STEP_MS=$(echo "scale=1; $TASK_TIME * 1000 / $TOTAL_STEPS" | bc -l)
-    else
-        PER_STEP_MS=0
-    fi
-    
-    echo "$TASK,$CAT,$S,$C,$RATE,$AVG_STEPS,$MAX_STEPS,$TASK_TIME,$PER_STEP_MS" >> results_v2.csv
-done
-
-echo "=============================================="
-echo "  RLDX-1 RoboCasa Reproduce v2 — Results"
-echo "  Setup: RTX 3090, --n-action-steps 16 --max-episode-steps 720"
-echo "=============================================="
-echo ""
-echo "===== Task별 결과 ====="
-column -s, -t results_v2.csv | head -25
-echo ""
-
-echo "===== 카테고리별 ====="
-awk -F, 'NR>1 {sum[$2]+=$3; tot[$2]+=$4} 
-         END {for (c in sum) printf "  %-8s %4d/%4d  %3d%%\n", c, sum[c], tot[c], sum[c]*100/tot[c]}' \
-    results_v2.csv | sort
-
-echo ""
-echo "===== 전체 ====="
-awk -F, 'NR>1 {s+=$3; t+=$4} END {printf "  v2:                %d / %d = %.1f%%\n", s, t, s*100/t}' results_v2.csv
-echo "  v1 (이전):         749 / 1200 = 62.4%"
-echo "  RLWRLD 보고치:                  70.6%"
-
-echo ""
-echo "===== Latency 추정 (full pipeline: inference + sim + render) ====="
-awk -F, 'NR>1 && $9>0 {sum+=$9; n++} END {if(n>0) printf "  평균 per-step time: %.1f ms (n=%d tasks)\n", sum/n, n}' results_v2.csv
-echo "  비교: 보고서 §6-1 RTX 5090 (pure inference): 43.7 ms/step"
+for task in TASKS:
+    directory = root / task
+    source = directory / 'simulation_results.csv'
+    videos = list(directory.rglob('*.mp4')) if directory.is_dir() else []
+    if not source.is_file() or not videos:
+        warn(f"{task}: missing simulation_results.csv or episode videos; omitted")
+        missing.append(task)
+        continue
+    # Same marker convention as the historical aggregation, restricted to video basenames.
+    # Use only raw episode videos, not edited/duplicated demo clips.
+    success = sum('success' in video.name for video in videos)
+    total = len(videos)
+    steps = []
+    try:
+        with source.open(newline='') as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            for row in reader:
+                if not row:
+                    continue
+                value = float(row[4])  # Historical upstream CSV: fifth field is sim steps.
+                if not __import__('math').isfinite(value) or value < 0:
+                    raise ValueError('invalid sim-step value')
+                steps.append(value)
+    except (OSError, IndexError, ValueError, csv.Error) as exc:
+        warn(f"{task}: cannot parse fifth CSV column ({exc}); omitted")
+        missing.append(task)
+        continue
+    if not steps or len(steps) != total:
+        warn(f"{task}: CSV rows ({len(steps)}) differ from episode videos ({total}); omitted")
+        missing.append(task)
+        continue
+    category = next((c for c in ('Turn', 'PnP', 'Open', 'Close', 'Coffee') if task.startswith(c)), 'Other')
+    log = root / '_logs' / f'{task}.log'
+    text = log.read_text(errors='replace') if log.is_file() else ''
+    matches = re.findall(r'Collecting\s+\d+\s+episodes\s+took\s+([0-9]+(?:\.[0-9]+)?)\s+seconds', text)
+    wall_time = matches[-1] if matches else ''
+    if not wall_time:
+        warn(f"{task}: task wall time unavailable; left blank")
+    rows.append([task, category, success, total, f'{100 * success / total:.1f}', f'{sum(steps)/len(steps):.1f}', f'{max(steps):g}', wall_time])
+if not rows:
+    sys.exit('No valid task results; existing RESULTS_CSV was not changed')
+dest.parent.mkdir(parents=True, exist_ok=True)
+with dest.open('w', newline='') as handle:
+    writer = csv.writer(handle)
+    writer.writerow(['task', 'category', 'success', 'total', 'rate_pct', 'avg_sim_steps', 'max_sim_steps', 'task_wall_time_sec'])
+    writer.writerows(rows)
+print(f'Results: {dest} ({len(rows)}/{len(TASKS)} tasks)')
+categories = defaultdict(lambda: [0, 0])
+for task, category, success, total, rate, *_ in rows:
+    print(f'{task}: {success}/{total} = {rate}%')
+    categories[category][0] += success
+    categories[category][1] += total
+for category, (success, total) in sorted(categories.items()):
+    print(f'{category}: {success}/{total} = {100 * success / total:.1f}%')
+success = sum(row[2] for row in rows)
+total = sum(row[3] for row in rows)
+print(f'TOTAL (available tasks): {success}/{total} = {100 * success / total:.1f}%')
+if missing:
+    warn('INCOMPLETE: aggregate is not the full 24-task benchmark score')
+    sys.exit(1)
+PYTHON

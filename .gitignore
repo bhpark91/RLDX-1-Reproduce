@@ -2,3 +2,13 @@
 __pycache__/
 .DS_Store
 *.log
+.venv/
+venv/
+.env
+output_final/
+/results_v2.csv
+*.mp4
+*.ckpt
+*.pt
+*.pth
+*.safetensors
